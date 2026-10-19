@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.prostratepossum.living-clicks",
+  "name": "Living Themes Click Effects",
+  "version": "1.0.0",
+  "author": "prostratepossum",
+  "description": "Small click-through effects where you click, matched to the theme: fireflies, sparkles and a ripple for Alpine Marmot, a drifting snowflake and a frost ring for Moonlit Hearth. Other themes get none. Needs python-evdev and the input group.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Clicks.qml"
+  },
+  "homepage": "https://github.com/prostratepossum/omarchy-living-themes"
+}

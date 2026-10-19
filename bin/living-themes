@@ -1,0 +1,280 @@
+#!/bin/bash
+# living-themes — switch everything that goes with an Omarchy theme.
+#
+# Runs from the theme-set hook on every theme change. A theme opts in by
+# shipping an extras/ folder (its "package"):
+#   ~/.config/omarchy/themes/<theme>/extras/
+#     starship.toml        prompt              ~/.config/starship.toml        -> link
+#     lazygit.yml          lazygit colours     ~/.config/lazygit/config.yml   -> link
+#     fastfetch.jsonc      fastfetch config    ~/.config/fastfetch/config.jsonc -> link
+#     fastfetch-logo.txt   terminal image      (point fastfetch.jsonc at current/fastfetch-logo.txt)
+#     shell.sh             fzf + eza colours   (sourced by the ~/.bashrc snippet)
+#     cursor               XCursor theme name  (applied live + persisted)
+#     login.wav            login chime         (living-themes-login-sound.service)
+#     boot.sh, boot.plymouth   boot splash command + the plymouth theme it sets
+#
+# The first time it takes over a file, your original is moved to
+# ~/.local/state/living-themes/originals/ and put back for themes without a
+# package. The live wallpaper, lock screen, intro and click plugins follow the
+# theme on their own; the SDDM login screen (greeter/) is updated here; the
+# boot splash needs sudo, so that's a notification with a button.
+#
+#   living-themes                 status
+#   living-themes apply [theme]   apply the package for the current (or given) theme
+#   living-themes boot            install the current package's boot splash (sudo)
+#   living-themes greeter         point the login screen at the current theme
+#   living-themes list            themes that ship a package
+#   living-themes release         put your own settings back (used by uninstall)
+set -euo pipefail
+
+THEMES=~/.config/omarchy/themes
+STATE=~/.local/state/living-themes
+CURRENT=$STATE/current
+ORIGINALS=$STATE/originals
+BOOT_STATE=$STATE/boot
+OMARCHY_CURRENT=~/.local/state/omarchy/current
+LOOKNFEEL=~/.config/hypr/looknfeel.lua
+CURSOR_SIZE=${XCURSOR_SIZE:-24}
+GREETER_STATE=${LIVING_THEMES_GREETER_STATE:-/usr/share/sddm/themes/living-themes/state}   # override for testing
+REGISTRY=~/.config/omarchy/plugins/io.github.prostratepossum.living-background/scenes/registry.js
+
+mkdir -p "$STATE" "$ORIGINALS"
+
+current_theme() { cat "$OMARCHY_CURRENT/theme.name" 2>/dev/null || echo ""; }
+current_wallpaper() { readlink -f "$OMARCHY_CURRENT/background" 2>/dev/null || echo ""; }
+
+package_for() {
+  local dir=$THEMES/$1/extras
+  [[ -n $1 && -d $dir ]] && echo "$dir" || echo ""
+}
+
+# --- linked config files -----------------------------------------------------
+# link <package file> <target>: point target at current/<file> when the package
+# has it, otherwise put the user's original back.
+link_or_restore() {
+  local name=$1 target=$2 pkg=$3
+  local rel=${target#"$HOME"/}
+  local saved=$ORIGINALS/${rel//\//%}
+  if [[ -n $pkg && -f $pkg/$name ]]; then
+    if [[ -e $target || -L $target ]] && [[ $(readlink "$target" 2>/dev/null) != "$CURRENT/$name" ]]; then
+      # Keep the very first original; later non-link files are backed up next to it.
+      if [[ ! -e $saved && ! -L $saved ]]; then
+        mv "$target" "$saved"
+      elif [[ ! -L $target ]]; then
+        mv "$target" "$saved.$(date +%s)"
+      else
+        rm -f "$target"
+      fi
+    fi
+    mkdir -p "$(dirname "$target")"
+    ln -sfn "$CURRENT/$name" "$target"
+    echo "  $name -> $target"
+  elif [[ $(readlink "$target" 2>/dev/null) == "$CURRENT/$name" ]]; then
+    rm -f "$target"
+    if [[ -e $saved || -L $saved ]]; then
+      mv "$saved" "$target"
+      echo "  $target: your original restored"
+    else
+      echo "  $target: removed (no original)"
+    fi
+  fi
+  return 0
+}
+
+# --- cursor ------------------------------------------------------------------
+CURSOR_BEGIN='-- >>> living-themes cursor >>>'
+CURSOR_END='-- <<< living-themes cursor <<<'
+
+set_cursor_line() {
+  local name=$1
+  [[ -f $LOOKNFEEL ]] || return 0
+  grep -qF -- "$CURSOR_BEGIN" "$LOOKNFEEL" || printf '%s\n%s\n' "$CURSOR_BEGIN" "$CURSOR_END" >>"$LOOKNFEEL"
+  # Rewrite the block's body.
+  awk -v b="$CURSOR_BEGIN" -v e="$CURSOR_END" -v n="$name" '
+    $0 == b { print; if (n != "") print "hl.env(\"XCURSOR_THEME\", \"" n "\")"; skip = 1; next }
+    $0 == e { skip = 0 }
+    !skip { print }' "$LOOKNFEEL" >"$LOOKNFEEL.tmp" && mv "$LOOKNFEEL.tmp" "$LOOKNFEEL"
+}
+
+apply_cursor() {
+  local pkg=$1 name=""
+  if [[ ! -f $ORIGINALS/cursor ]]; then
+    gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | tr -d "'" >"$ORIGINALS/cursor" || : >"$ORIGINALS/cursor"
+  fi
+  if [[ -n $pkg && -f $pkg/cursor ]]; then
+    name=$(<"$pkg/cursor")
+    if [[ ! -d ~/.local/share/icons/$name && ! -d /usr/share/icons/$name ]]; then
+      echo "  cursor: $name not installed, skipped"; return
+    fi
+    set_cursor_line "$name"
+  else
+    name=$(<"$ORIGINALS/cursor")
+    set_cursor_line ""
+    [[ -n $name ]] || name=Adwaita
+  fi
+  hyprctl setcursor "$name" "$CURSOR_SIZE" >/dev/null 2>&1 || true
+  gsettings set org.gnome.desktop.interface cursor-theme "$name" 2>/dev/null || true
+  echo "  cursor: $name"
+}
+
+# --- login screen ------------------------------------------------------------
+# Scene for a wallpaper, read from the plugins' scene registry.
+scene_for() {
+  local name pair
+  name=$(basename "$1")
+  [[ -f $REGISTRY ]] || { echo ""; return; }
+  while read -r pair; do
+    local m=${pair%%|*} s=${pair##*|}
+    [[ -n $m && $name == *"$m"* ]] && { echo "$s"; return; }
+  done < <(sed -n 's/.*match: *"\([^"]*\)".*scene: *"\([^"]*\)".*/\1|\2/p' "$REGISTRY")
+  echo ""
+}
+
+theme_color() {
+  local key=$1 fallback=$2 file=$OMARCHY_CURRENT/theme/colors.toml v=""
+  [[ -f $file ]] && v=$(sed -n "s/^$key *= *\"\\(#[0-9a-fA-F]\\{6\\}\\)\".*/\\1/p" "$file" | head -1)
+  echo "${v:-$fallback}"
+}
+
+apply_greeter() {
+  [[ -d $GREETER_STATE && -w $GREETER_STATE ]] || { echo "  login screen: not installed (greeter/install.sh)"; return; }
+  local wp scene stem ext file=""
+  wp=$(current_wallpaper)
+  scene=$(scene_for "$wp")
+  stem=$(basename "${wp%.*}")
+  rm -f "$GREETER_STATE"/wallpaper.*
+  if [[ -f $wp ]]; then
+    ext=${wp##*.}
+    file=wallpaper.$ext
+    cp "$wp" "$GREETER_STATE/$file"
+    chmod 644 "$GREETER_STATE/$file"
+  fi
+  cat >"$GREETER_STATE/Variant.qml.tmp" <<QML
+import QtQuick
+// Written by living-themes on every theme switch — don't edit by hand.
+QtObject {
+  readonly property string scene: "$scene"
+  readonly property string stem: "$stem"
+  readonly property string wallpaper: "$file"
+  readonly property color background: "$(theme_color background '#1a1b26')"
+  readonly property color foreground: "$(theme_color foreground '#c0caf5')"
+  readonly property color accent: "$(theme_color accent '#7aa2f7')"
+  readonly property color urgent: "$(theme_color red '#f7768e')"
+}
+QML
+  chmod 644 "$GREETER_STATE/Variant.qml.tmp"
+  mv "$GREETER_STATE/Variant.qml.tmp" "$GREETER_STATE/Variant.qml"
+  echo "  login screen: ${scene:-plain} ($stem)"
+}
+
+# --- boot splash -------------------------------------------------------------
+plymouth_theme() { sed -n 's/^Theme=//p' /etc/plymouth/plymouthd.conf 2>/dev/null; }
+
+boot_matches() {
+  local pkg=$1 last
+  [[ -n $pkg && -f $pkg/boot.plymouth ]] || return 0
+  [[ $(plymouth_theme) == "$(<"$pkg/boot.plymouth")" ]] || return 1
+  last=$(cat "$BOOT_STATE" 2>/dev/null || true)
+  [[ -z $last || $last == "$pkg" ]]
+}
+
+offer_boot() {
+  local theme=$1
+  # Ask in the background so the theme switch isn't held up; drop any
+  # reminder left over from an earlier switch first.
+  pkill -f '^notify-send -a Living Themes' 2>/dev/null || true
+  (
+    action=$(notify-send -a "Living Themes" -i preferences-desktop-theme \
+      -A boot="Update boot splash" \
+      "Boot splash still shows the old theme" \
+      "The $theme boot splash needs your password to install." 2>/dev/null || true)
+    if [[ $action == boot ]]; then
+      omarchy-launch-floating-terminal-with-presentation "living-themes boot"
+    fi
+  ) >/dev/null 2>&1 &
+  disown || true
+}
+
+# --- commands ----------------------------------------------------------------
+cmd_apply() {
+  local theme=${1:-$(current_theme)}
+  local pkg
+  pkg=${2-$(package_for "$theme")}
+  echo "living-themes: $theme -> ${pkg:-no package (your own settings)}"
+  if [[ -n $pkg ]]; then ln -sfn "$pkg" "$CURRENT"; else rm -f "$CURRENT"; fi
+
+  link_or_restore starship.toml ~/.config/starship.toml "$pkg"
+  link_or_restore lazygit.yml ~/.config/lazygit/config.yml "$pkg"
+  link_or_restore fastfetch.jsonc ~/.config/fastfetch/config.jsonc "$pkg"
+  if [[ -n $pkg && -f $pkg/shell.sh ]]; then echo "  fzf/eza: shell.sh (open shells update at their next prompt)"; fi
+  if [[ -n $pkg && -f $pkg/login.wav ]]; then echo "  login chime: login.wav"; fi
+  apply_cursor "$pkg"
+  apply_greeter
+
+  if boot_matches "$pkg"; then
+    pkill -f '^notify-send -a Living Themes' 2>/dev/null || true
+    if [[ -n $pkg && -f $pkg/boot.plymouth ]]; then echo "  boot splash: up to date"; fi
+  else
+    echo "  boot splash: needs update -> run 'living-themes boot' (notification sent)"
+    offer_boot "$theme"
+  fi
+}
+
+# Hand everything back: your original prompt/lazygit/fastfetch files and
+# cursor, as if the current theme had no package. Used by --uninstall.
+cmd_release() {
+  cmd_apply "$(current_theme)" ""
+  if [[ -f $LOOKNFEEL ]] && grep -qF -- "$CURSOR_BEGIN" "$LOOKNFEEL"; then
+    sed -i "/^$CURSOR_BEGIN\$/,/^$CURSOR_END\$/d" "$LOOKNFEEL"
+  fi
+}
+
+cmd_boot() {
+  local pkg
+  pkg=$(readlink -f "$CURRENT" 2>/dev/null || true)
+  [[ -n $pkg && -x $pkg/boot.sh ]] || { echo "This theme has no boot splash."; exit 0; }
+  echo "Updating the boot splash for $(basename "$(dirname "$pkg")")…"
+  "$pkg/boot.sh"
+  echo "$pkg" >"$BOOT_STATE"
+  echo "Boot splash now: $(plymouth_theme)"
+}
+
+cmd_status() {
+  local theme pkg wp
+  theme=$(current_theme)
+  pkg=$(readlink -f "$CURRENT" 2>/dev/null || true)
+  wp=$(current_wallpaper)
+  echo "Omarchy theme:  $theme"
+  echo "Package:        ${pkg:-none}"
+  [[ $pkg == "$(package_for "$theme")" ]] || echo "                (out of step with the theme — run: living-themes apply)"
+  echo "Prompt:         $(readlink -f ~/.config/starship.toml 2>/dev/null || echo default)"
+  echo "Cursor:         $(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | tr -d "'")"
+  echo "Wallpaper:      $(basename "$wp")  (scene: $(scene_for "$wp" | sed 's/^$/none/'))"
+  echo "Login screen:   $(sed -n 's/.*property string scene: "\(.*\)"/\1/p' "$GREETER_STATE/Variant.qml" 2>/dev/null | sed 's/^$/plain/' || echo "not installed")"
+  if [[ -n $pkg && -f $pkg/boot.plymouth ]]; then
+    if boot_matches "$pkg"; then
+      echo "Boot splash:    $(plymouth_theme)  (up to date)"
+    else
+      echo "Boot splash:    $(plymouth_theme)  (out of date — run: living-themes boot)"
+    fi
+  fi
+}
+
+cmd_list() {
+  local d
+  for d in "$THEMES"/*/extras; do
+    [[ -d $d ]] || continue
+    printf '%-20s %s\n' "$(basename "$(dirname "$d")")" "$(cd "$d" && ls | tr '\n' ' ')"
+  done
+}
+
+case ${1:-status} in
+  apply) shift; cmd_apply "${1:-}" ;;
+  release) cmd_release ;;
+  boot) cmd_boot ;;
+  greeter) apply_greeter ;;
+  list) cmd_list ;;
+  status) cmd_status ;;
+  -h | --help | help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) echo "unknown command: $1 (try: living-themes help)" >&2; exit 1 ;;
+esac

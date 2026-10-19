@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.prostratepossum.living-background",
+  "name": "Living Themes Background",
+  "version": "1.0.0",
+  "author": "prostratepossum",
+  "description": "Omarchy background renderer with live scenes: the Starwatch sky (twinkling stars, fireflies, shooting stars) and Moonlit Hearth (falling snow, moon halo, lit windows, chimney smoke). Scenes are picked by wallpaper name; other wallpapers stay static.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Background.qml"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.background"
+  },
+  "homepage": "https://github.com/prostratepossum/omarchy-living-themes"
+}

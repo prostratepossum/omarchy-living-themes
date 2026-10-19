@@ -1,0 +1,9 @@
+[SddmGreeterTheme]
+Name=Living Themes
+Description=The Living Themes lock screen at login: the current theme's wallpaper and colors, with its live scene (Starwatch, Moonlit Hearth) when it has one
+Author=prostratepossum
+Type=sddm-theme
+Version=1.0
+MainScript=Main.qml
+ConfigFile=theme.conf
+QtVersion=6

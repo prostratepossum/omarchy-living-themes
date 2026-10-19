@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.prostratepossum.living-intro",
+  "name": "Living Themes Login Intro",
+  "version": "1.0.0",
+  "author": "prostratepossum",
+  "description": "A short one-shot login intro for scene wallpapers: the live scene fades in, fireflies or snow gather into the theme's badge, the title appears and an iris opens onto the desktop. Click-through, plays once per boot, does nothing on wallpapers without a scene.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Intro.qml"
+  },
+  "homepage": "https://github.com/prostratepossum/omarchy-living-themes"
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Living Themes login chime (the current theme's extras/login.wav)
+After=graphical-session.target pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+# Themes without a chime stay quiet.
+ExecCondition=/usr/bin/test -f %h/.local/state/living-themes/current/login.wav
+# Let the desktop and audio settle before the chime plays.
+ExecStartPre=/usr/bin/sleep 2
+ExecStart=/usr/bin/pw-play %h/.local/state/living-themes/current/login.wav
+
+[Install]
+WantedBy=graphical-session.target

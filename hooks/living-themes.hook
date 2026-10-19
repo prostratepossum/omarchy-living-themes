@@ -1,0 +1,4 @@
+#!/bin/bash
+# Swap the theme package (prompt, fzf/eza, terminal image, lazygit, cursor,
+# login chime, login screen, boot-splash reminder) to match the theme just set.
+exec "$HOME/.local/bin/living-themes" apply "${1:-}"

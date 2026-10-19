@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.prostratepossum.living-lock",
+  "name": "Living Themes Lock Screen",
+  "version": "1.0.0",
+  "author": "prostratepossum",
+  "description": "Omarchy lock screen with live scenes: the Starwatch sky with fireflies and the marmot badge, or Moonlit Hearth with snow, the moon-and-cabin badge and warm firelight around the password field. Picked by wallpaper name; other wallpapers get a plain lock in the theme's colors.",
+  "omarchy": {
+    "capabilities": [
+      "authentication"
+    ],
+    "clonedFrom": "omarchy.lock"
+  },
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  },
+  "homepage": "https://github.com/prostratepossum/omarchy-living-themes"
+}
